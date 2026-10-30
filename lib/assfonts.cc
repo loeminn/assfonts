@@ -19,11 +19,9 @@
 
 #include "assfonts.h"
 
-#include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <queue>
 #include <string>
 #include <vector>
 
@@ -36,6 +34,7 @@
 #include "ass_string.h"
 #include "font_parser.h"
 #include "font_subsetter.h"
+#include "log_queue.h"
 
 namespace fs = ghc::filesystem;
 
@@ -44,10 +43,7 @@ struct LogType {
   std::string msg;
 };
 
-struct LogQueue {
-  bool is_finished = false;
-  std::queue<LogType> queue;
-};
+using LogQueue = ass::LogQueue<LogType>;
 
 void ShowLog(std::shared_ptr<ass::Logger> logger, const LogType& log) {
   switch (log.level) {
@@ -69,37 +65,10 @@ void ShowLog(std::shared_ptr<ass::Logger> logger, const LogType& log) {
   }
 }
 
-void ConsumeQueue(std::shared_ptr<ass::Logger> logger, LogQueue& queue,
-                  std::mutex& mtx, std::condition_variable& cv) {
-  if (queue.is_finished) {
-    while (!queue.queue.empty()) {
-      ShowLog(logger, queue.queue.front());
-      queue.queue.pop();
-    }
-
-  } else {
-    while (true) {
-      std::unique_lock<std::mutex> lock(mtx);
-      cv.wait(lock, [&] { return !queue.queue.empty() || queue.is_finished; });
-
-      if (queue.queue.empty()) {
-        break;
-      }
-
-      ShowLog(logger, queue.queue.front());
-      queue.queue.pop();
-
-      if (queue.is_finished) {
-        while (true) {
-          if (queue.queue.empty()) {
-            break;
-          }
-          ShowLog(logger, queue.queue.front());
-          queue.queue.pop();
-        }
-        break;
-      }
-    }
+void ConsumeQueue(std::shared_ptr<ass::Logger> logger, LogQueue& queue) {
+  LogType log;
+  while (queue.Pop(log)) {
+    ShowLog(logger, log);
   }
 }
 
@@ -182,31 +151,25 @@ void AssfontsRun(const char** input_paths, const unsigned int num_paths,
 
   fp.LoadDB(db.native() + fs::path::preferred_separator + _ST("fonts.json"));
 
-  ThreadPool pool(num_thread);
-
   std::vector<LogQueue> queues(num_paths);
-  std::vector<std::mutex> mtxs(num_paths);
-  std::vector<std::condition_variable> cvs(num_paths);
 
   std::vector<ass::AssParser> aps;
   std::map<ass::AssParser::FontDesc, std::unordered_set<char32_t>> font_sets;
   std::mutex font_sets_mtx;
+  // Join workers before destroying any state captured by their callbacks.
+  ThreadPool pool(num_thread);
 
   for (unsigned int idx = 0; idx < num_paths; ++idx) {
-    pool.enqueue([=, &fp, &queues, &mtxs, &cvs, &font_sets, &font_sets_mtx,
+    pool.enqueue([=, &fp, &queues, &font_sets, &font_sets_mtx,
                   &aps]() {
       auto finish = [&]() {
-        queues[idx].is_finished = true;
-        cvs[idx].notify_all();
+        queues[idx].Finish();
       };
 
       auto log_callback = [&](const char* msg,
                               const ASSFONTS_LOG_LEVEL log_level) {
         LogType log = {log_level, std::string(msg)};
-        std::unique_lock<std::mutex> lock(mtxs[idx]);
-        queues[idx].queue.push(log);
-        lock.unlock();
-        cvs[idx].notify_all();
+        queues[idx].Push(std::move(log));
       };
 
       auto t_logger =
@@ -281,7 +244,7 @@ void AssfontsRun(const char** input_paths, const unsigned int num_paths,
       logger->Text("");
     }
 
-    ConsumeQueue(logger, queues[idx], mtxs[idx], cvs[idx]);
+    ConsumeQueue(logger, queues[idx]);
   }
 
   if (is_font_combined) {
