@@ -1,0 +1,70 @@
+name: Linux CLI
+on:
+  push:
+    branches: [main, fix/log-queue-completion]
+    tags: ['v*-suboxide.*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    container: debian:bookworm
+    timeout-minutes: 45
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential cmake ninja-build git curl ca-certificates zip unzip tar pkg-config autoconf automake libtool python3 fonts-dejavu-core
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build and test
+        run: bash packaging/cli/build.sh
+      - name: Package
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
+        run: |
+          mkdir -p package/bin package/share/doc/assfonts
+          cp build/cli/src/cli/assfonts package/bin/
+          strip package/bin/assfonts
+          cp LICENSE NEWS NOTICE package/share/doc/assfonts/
+          printf '%s\n' "$GITHUB_SHA" > package/share/doc/assfonts/SOURCE_COMMIT
+          tar -czf "assfonts-$VERSION-$ARCH-Linux.tar.gz" -C package .
+          sha256sum "assfonts-$VERSION-$ARCH-Linux.tar.gz" > "assfonts-$VERSION-$ARCH-Linux.tar.gz.sha256sum"
+          ldd package/bin/assfonts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.arch }}
+          path: assfonts-*-Linux.tar.gz*
+          if-no-files-found: error
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          merge-multiple: true
+      - name: Publish tested CLI packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" \
+            --notes 'Linux CLI maintenance release: synchronize log queue completion and join workers before destroying shared state. Includes amd64/arm64 binaries built on Debian 12; queue and real two-pass batch tests passed on both architectures.' \
+            assfonts-*-Linux.tar.gz*

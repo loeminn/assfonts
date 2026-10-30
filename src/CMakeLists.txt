@@ -1,4 +1,6 @@
 cmake_minimum_required (VERSION 3.16)
 
 add_subdirectory(cli)
-add_subdirectory(qt)
+if(ASSFONTS_BUILD_GUI)
+    add_subdirectory(qt)
+endif()

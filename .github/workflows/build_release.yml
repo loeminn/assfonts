@@ -1,10 +1,8 @@
 name: Build Release
 run-name: Build Release by ${{ github.actor }}
-on: 
-  release:
-    types: [ published ]
-  push:
-    branches: [ main ] 
+# Legacy GUI/cross-platform pipeline; Linux maintenance releases use linux-cli.yml.
+on:
+  workflow_dispatch:
 jobs:
   build-linux:
     runs-on: ubuntu-22.04

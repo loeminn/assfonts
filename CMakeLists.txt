@@ -1,4 +1,4 @@
-﻿cmake_minimum_required (VERSION 3.16)
+cmake_minimum_required (VERSION 3.16)
 
 set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake"
     CACHE STRING "Vcpkg toolchain file")
@@ -8,6 +8,8 @@ project (assfonts CXX C)
 set(VERSION_MAJOR 0)
 set(VERSION_MINOR 7)
 set(VERSION_PATCH 3)
+
+option(ASSFONTS_BUILD_GUI "Build the Qt desktop application" ON)
 
 add_subdirectory(3rdparty)
 
@@ -20,11 +22,12 @@ find_package(CLI11 CONFIG REQUIRED)
 find_package(ghc_filesystem CONFIG REQUIRED)
 find_package(pcre2 CONFIG REQUIRED)
 find_package(string-view-lite CONFIG REQUIRED)
-find_package(Qt6 CONFIG REQUIRED COMPONENTS Core Gui Widgets Concurrent)
-find_package(httplib CONFIG REQUIRED)
-
-if(LINUX)
-    find_package(Qt6WaylandClient CONFIG REQUIRED)
+if(ASSFONTS_BUILD_GUI)
+    find_package(Qt6 CONFIG REQUIRED COMPONENTS Core Gui Widgets Concurrent)
+    find_package(httplib CONFIG REQUIRED)
+    if(LINUX)
+        find_package(Qt6WaylandClient CONFIG REQUIRED)
+    endif()
 endif()
 
 set(CXX_STD_VER cxx_std_17)

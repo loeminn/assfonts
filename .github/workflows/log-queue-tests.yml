@@ -1,0 +1,13 @@
+name: Log queue tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S tests -B build/queue-tests -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build/queue-tests
+      - run: ctest --test-dir build/queue-tests --output-on-failure
