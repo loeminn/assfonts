@@ -1,4 +1,5 @@
 #include "../lib/log_queue.h"
+#include "../lib/ThreadPool.h"
 
 #include <cstdlib>
 #include <future>
@@ -11,6 +12,24 @@ void Check(bool ok) {
 }
 
 int main() {
+  // packaged_task stores exceptions; completion must still wake the consumer.
+  for (bool unknown : {false, true}) {
+    ass::LogQueue<int> queue;
+    ThreadPool pool(1);
+    auto result = pool.enqueue([&] {
+      ass::LogQueue<int>::CompletionGuard completion(queue);
+      queue.Push(42);
+      if (unknown) throw 7;
+      throw std::runtime_error("injected worker failure");
+    });
+    int message;
+    Check(queue.Pop(message) && message == 42);
+    Check(!queue.Pop(message));
+    bool caught = false;
+    try { result.get(); } catch (...) { caught = true; }
+    Check(caught);
+  }
+
   // A worker may finish before the main thread reaches its log queue.
   ass::LogQueue<int> completed;
   completed.Push(1);

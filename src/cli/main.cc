@@ -17,6 +17,8 @@
  *  written by wyzdwdz (https://github.com/wyzdwdz)
  */
 
+#include <atomic>
+#include <exception>
 #include <memory>
 #include <thread>
 
@@ -61,7 +63,12 @@ static std::string SAVE_FILES_PATH = []() {
   return path.u8string();
 }();
 
+static std::atomic<bool> processing_failed{false};
+static bool quiet = false;
+
 static void log_callback(const char* msg, const ASSFONTS_LOG_LEVEL log_level) {
+  if (log_level == ASSFONTS_ERROR) processing_failed.store(true);
+  if (quiet) return;
   switch (log_level) {
     case ASSFONTS_INFO:
       nowide::cout << "[INFO] " << msg << std::endl;
@@ -117,7 +124,7 @@ struct DirectoryValidator : public CLI::Validator {
 };
 const static DirectoryValidator directory_validator;
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) try {
   auto loc = std::setlocale(LC_ALL, ".UTF8");
   if (loc == nullptr) {
     loc = std::setlocale(LC_ALL, "");
@@ -255,7 +262,8 @@ int main(int argc, char** argv) {
   ASSFONTS_LOG_LEVEL max_log_level = ASSFONTS_INFO;
   switch (verbose) {
     case 0:
-      max_log_level = ASSFONTS_NONE;
+      quiet = true;
+      max_log_level = ASSFONTS_ERROR;
       break;
     case 1:
       max_log_level = ASSFONTS_ERROR;
@@ -284,7 +292,7 @@ int main(int argc, char** argv) {
   }
 
   if (inputs.empty()) {
-    return 0;
+    return processing_failed.load() ? 1 : 0;
   }
 
   auto inputs_char_list = std::unique_ptr<char*[]>(new char*[inputs.size()]);
@@ -312,5 +320,11 @@ int main(int argc, char** argv) {
               is_embed_only, is_rename, is_font_combined, num_thread,
               log_callback, max_log_level);
 
-  return 0;
+  return processing_failed.load() ? 1 : 0;
+} catch (const std::exception& error) {
+  log_callback(error.what(), ASSFONTS_ERROR);
+  return 1;
+} catch (...) {
+  log_callback("Unknown processing exception", ASSFONTS_ERROR);
+  return 1;
 }
