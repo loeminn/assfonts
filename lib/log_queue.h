@@ -15,6 +15,16 @@ namespace ass {
 template <typename T>
 class LogQueue {
  public:
+  class CompletionGuard {
+   public:
+    explicit CompletionGuard(LogQueue& queue) : queue_(queue) {}
+    ~CompletionGuard() { queue_.Finish(); }
+    CompletionGuard(const CompletionGuard&) = delete;
+    CompletionGuard& operator=(const CompletionGuard&) = delete;
+   private:
+    LogQueue& queue_;
+  };
+
   void Push(T value) {
     {
       std::lock_guard<std::mutex> lock(mutex_);

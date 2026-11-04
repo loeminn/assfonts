@@ -19,6 +19,7 @@
 
 #include "assfonts.h"
 
+#include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -151,6 +152,11 @@ void AssfontsRun(const char** input_paths, const unsigned int num_paths,
 
   fp.LoadDB(db.native() + fs::path::preferred_separator + _ST("fonts.json"));
 
+  if (num_thread == 0) {
+    logger->Error("Worker count must be greater than zero.");
+    return;
+  }
+
   std::vector<LogQueue> queues(num_paths);
 
   std::vector<ass::AssParser> aps;
@@ -162,80 +168,85 @@ void AssfontsRun(const char** input_paths, const unsigned int num_paths,
   for (unsigned int idx = 0; idx < num_paths; ++idx) {
     pool.enqueue([=, &fp, &queues, &font_sets, &font_sets_mtx,
                   &aps]() {
-      auto finish = [&]() {
-        queues[idx].Finish();
-      };
+      LogQueue::CompletionGuard completion(queues[idx]);
+      try {
+        auto log_callback = [&](const char* msg,
+                                const ASSFONTS_LOG_LEVEL log_level) {
+          LogType log = {log_level, std::string(msg)};
+          queues[idx].Push(std::move(log));
+        };
 
-      auto log_callback = [&](const char* msg,
-                              const ASSFONTS_LOG_LEVEL log_level) {
-        LogType log = {log_level, std::string(msg)};
-        queues[idx].Push(std::move(log));
-      };
+        auto t_logger =
+            std::make_shared<ass::Logger>(ass::Logger(log_callback, log_level));
 
-      auto t_logger =
-          std::make_shared<ass::Logger>(ass::Logger(log_callback, log_level));
+        ass::AssParser ap(t_logger);
 
-      ass::AssParser ap(t_logger);
+        fs::path input(input_paths[idx]);
 
-      fs::path input(input_paths[idx]);
+        ap.set_output_dir_path(output.native());
 
-      ap.set_output_dir_path(output.native());
-
-      if (brightness != 0) {
-        if (!ap.Recolorize(input.native(), brightness)) {
-          return finish();
-        }
-
-        AString hdr_filename =
-            input.stem().native() + _ST(".hdr") + input.extension().native();
-        input = output / hdr_filename;
-      }
-
-      if (!ap.ReadFile(input.native())) {
-        return finish();
-      }
-
-      if (is_font_combined) {
-        std::lock_guard<std::mutex> lock(font_sets_mtx);
-
-        auto font_sets_this = ap.get_font_sets();
-        for (const auto& font_set : font_sets_this) {
-          if (font_sets.find(font_set.first) == font_sets.end()) {
-            font_sets[font_set.first] = font_set.second;
-          } else {
-            font_sets[font_set.first].insert(font_set.second.begin(),
-                                             font_set.second.end());
+        if (brightness != 0) {
+          if (!ap.Recolorize(input.native(), brightness)) {
+            return;
           }
+
+          AString hdr_filename =
+              input.stem().native() + _ST(".hdr") + input.extension().native();
+          input = output / hdr_filename;
         }
 
-        aps.emplace_back(std::move(ap));
+        if (!ap.ReadFile(input.native())) {
+          return;
+        }
 
-        return finish();
+        if (is_font_combined) {
+          std::lock_guard<std::mutex> lock(font_sets_mtx);
+
+          auto font_sets_this = ap.get_font_sets();
+          for (const auto& font_set : font_sets_this) {
+            if (font_sets.find(font_set.first) == font_sets.end()) {
+              font_sets[font_set.first] = font_set.second;
+            } else {
+              font_sets[font_set.first].insert(font_set.second.begin(),
+                                               font_set.second.end());
+            }
+          }
+
+          aps.emplace_back(std::move(ap));
+
+          return;
+        }
+
+        if (is_embed_only && is_subset_only) {
+          return;
+        }
+
+        ass::FontSubsetter fsub(fp, ap.get_font_sets(), t_logger);
+
+        if (!is_embed_only) {
+          fsub.SetSubfontDir(output.native() + fs::path::preferred_separator +
+                             input.stem().native() + _ST("_subsetted"));
+        }
+
+        if (!fsub.Run(is_embed_only, is_rename)) {
+          t_logger->Error("Font processing failed.");
+          return;
+        }
+
+        ass::AssFontEmbedder afe(ap, fsub.get_subfonts_info(), t_logger);
+
+        afe.set_output_dir_path(output.native());
+        if (!afe.Run(is_subset_only, is_embed_only, is_rename)) {
+          t_logger->Error("Subtitle output failed.");
+          return;
+        }
+      } catch (const std::exception& error) {
+        queues[idx].Push({ASSFONTS_ERROR,
+            std::string("Subtitle task failed: ") + input_paths[idx] + ": " + error.what()});
+      } catch (...) {
+        queues[idx].Push({ASSFONTS_ERROR,
+            std::string("Subtitle task failed: ") + input_paths[idx] + ": unknown exception"});
       }
-
-      if (is_embed_only && is_subset_only) {
-        return finish();
-      }
-
-      ass::FontSubsetter fsub(fp, ap.get_font_sets(), t_logger);
-
-      if (!is_embed_only) {
-        fsub.SetSubfontDir(output.native() + fs::path::preferred_separator +
-                           input.stem().native() + _ST("_subsetted"));
-      }
-
-      if (!fsub.Run(is_embed_only, is_rename)) {
-        return finish();
-      }
-
-      ass::AssFontEmbedder afe(ap, fsub.get_subfonts_info(), t_logger);
-
-      afe.set_output_dir_path(output.native());
-      if (!afe.Run(is_subset_only, is_embed_only, is_rename)) {
-        return finish();
-      }
-
-      finish();
     });
   }
 
@@ -255,6 +266,7 @@ void AssfontsRun(const char** input_paths, const unsigned int num_paths,
                        _ST("subsetted_fonts"));
 
     if (!fsub.Run(false, is_rename)) {
+      logger->Error("Combined font processing failed.");
       return;
     }
 
@@ -266,6 +278,7 @@ void AssfontsRun(const char** input_paths, const unsigned int num_paths,
       afe.set_output_dir_path(output.native());
 
       if (!afe.Run(true, false, is_rename)) {
+        logger->Error("Subtitle output failed.");
         return;
       }
     }
