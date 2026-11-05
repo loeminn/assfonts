@@ -21,3 +21,19 @@ the predicate check and the wait, leaving the CLI stuck after processing.
 All queue state now uses one mutex; completion also drains any pending logs.
 This fixes a source-level defect, but does not establish the cause of every
 reported subtitle timeout.
+
+## Style Format regression
+
+After building the CLI, run:
+
+```sh
+python3 tests/cli_format_test.py build/cli/src/cli/assfonts
+```
+
+Requires DejaVu fonts in `/usr/share/fonts/truetype/dejavu`, like the batch
+regressions. Covers upstream #18's field order, reversed and minimal layouts,
+case-insensitive field names, bold/italic selection, embedding, subsetting,
+font rename offsets and re-embedding. Also checks the legacy layout without a
+Format declaration and rejection of missing/duplicate fields and invalid rows.
+Event text containing commas must survive unchanged. Event Format reordering
+is outside this style-parser regression.
