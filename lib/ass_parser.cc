@@ -19,6 +19,7 @@
 
 #include "ass_parser.h"
 
+#include <algorithm>
 #include <exception>
 #include <sstream>
 
@@ -220,52 +221,24 @@ bool AssParser::FindTitle(const std::string& line, const std::string& title) {
 
 bool AssParser::ParseLine(const std::string& line, const unsigned int num_field,
                           std::vector<nonstd::string_view>& res) {
-  nonstd::string_view word;
-  auto ch = line.begin();
-  unsigned int field = 0;
-
-  auto GetWords = [&](const char delimiter) {
-    nonstd::string_view substr(&(*ch), line.end() - ch);
-    size_t pos = 0;
-    while ((pos = substr.find(delimiter)) != nonstd::string_view::npos) {
-      res.emplace_back(Trim(nonstd::string_view(&(*ch), pos)));
-
-      pos += 1;
-
-      if (delimiter == ':') {
-        ch += pos;
-        break;
-      } else if (delimiter == ',') {
-        ++field;
-
-        if (field >= num_field - 1) {
-          ch += pos;
-          break;
-        }
-      }
-
-      ch += pos;
-      substr = nonstd::string_view(&(*ch), line.end() - ch);
-    }
-  };
-
-  GetWords(':');
-  GetWords(',');
-
-  if (ch != line.end()) {
-    word = nonstd::string_view(&(*ch), line.end() - ch);
-  } else {
-    word = nonstd::string_view("");
-  }
-
-  res.emplace_back(word);
-
-  if (field < num_field - 1) {
-    logger_->Error(_ST("Failed to parse \"{}\". Incorrect number of field."),
-                   ass_path_);
+  const auto colon = line.find(':');
+  if (colon == std::string::npos || num_field == 0) {
     return false;
   }
-
+  res.emplace_back(Trim(nonstd::string_view(line.data(), colon)));
+  size_t begin = colon + 1;
+  for (unsigned int field = 1; field < num_field; ++field) {
+    const auto comma = line.find(',', begin);
+    if (comma == std::string::npos) {
+      logger_->Error(_ST("Failed to parse \"{}\". Incorrect number of field."),
+                     ass_path_);
+      return false;
+    }
+    res.emplace_back(Trim(nonstd::string_view(line.data() + begin, comma - begin)));
+    begin = comma + 1;
+  }
+  // The final field may be dialogue text containing commas or whitespace.
+  res.emplace_back(line.data() + begin, line.size() - begin);
   return true;
 }
 
@@ -306,28 +279,75 @@ bool AssParser::ParseAss() {
 bool AssParser::GetStyles(std::vector<TextInfo>::iterator& line,
                           const std::vector<TextInfo>::iterator end,
                           bool& has_style) {
-  if (!FindTitle((*line).text, "[V4+ Styles]") &&
-      !FindTitle((*line).text, "[V4 Styles]")) {
+  if (line == end ||
+      (!FindTitle((*line).text, "[V4+ Styles]") &&
+       !FindTitle((*line).text, "[V4 Styles]"))) {
     return true;
   }
 
+  // Preserve the conventional layout for scripts without a Format line.
+  unsigned int num_fields = 10;
+  size_t name_index = 1, font_index = 2, bold_index = 8, italic_index = 9;
+  bool has_format = false;
   ++line;
 
-  for (; line != text_.end(); ++line) {
-    if (FindTitle((*line).text, "[")) {
+  for (; line != end; ++line) {
+    if (FindTitle(line->text, "[")) {
       break;
     }
 
-    if (!FindTitle((*line).text, "Style:")) {
+    if (FindTitle(line->text, "Format:")) {
+      num_fields = static_cast<unsigned int>(
+                       std::count(line->text.begin(), line->text.end(), ',')) + 1;
+      std::vector<nonstd::string_view> fields;
+      if (!ParseLine(line->text, num_fields, fields)) {
+        return false;
+      }
+      std::map<std::string, size_t> indices;
+      for (size_t i = 1; i < fields.size(); ++i) {
+        const auto field = ToLower(std::string(Trim(fields[i])));
+        if (field.empty() || !indices.emplace(field, i).second) {
+          logger_->Error("Invalid style Format: empty or duplicate field. (Line {})",
+                         line->line_num);
+          return false;
+        }
+      }
+      for (const auto* required : {"name", "fontname", "bold", "italic"}) {
+        if (indices.find(required) == indices.end()) {
+          logger_->Error("Invalid style Format: missing {}. (Line {})",
+                         required, line->line_num);
+          return false;
+        }
+      }
+      name_index = indices.at("name");
+      font_index = indices.at("fontname");
+      bold_index = indices.at("bold");
+      italic_index = indices.at("italic");
+      has_format = true;
       continue;
     }
 
-    std::vector<nonstd::string_view> styles;
-    if (!ParseLine((*line).text, 10, styles)) {
+    if (!FindTitle(line->text, "Style:")) {
+      continue;
+    }
+
+    std::vector<nonstd::string_view> fields;
+    if (!ParseLine(line->text, num_fields, fields)) {
       return false;
     }
-    StyleInfo res = {(*line).line_num, (*line).text.c_str(), styles};
-    styles_.emplace_back(res);
+    if (has_format && fields.back().find(',') != nonstd::string_view::npos) {
+      logger_->Error("Style field count does not match Format. (Line {})",
+                     line->line_num);
+      return false;
+    }
+    StyleInfo style = {line->line_num, line->text.c_str(),
+                       Trim(fields[name_index]), Trim(fields[font_index]),
+                       Trim(fields[bold_index]), Trim(fields[italic_index])};
+    if (style.name.empty() || style.fontname.empty() || style.fontname == "@") {
+      logger_->Error("Style name or font name is empty. (Line {})", line->line_num);
+      return false;
+    }
+    styles_.emplace_back(style);
   }
   has_style = true;
 
@@ -337,7 +357,7 @@ bool AssParser::GetStyles(std::vector<TextInfo>::iterator& line,
 bool AssParser::GetEvents(std::vector<TextInfo>::iterator& line,
                           const std::vector<TextInfo>::iterator end,
                           bool& has_event) {
-  if (!FindTitle((*line).text, "[Events]")) {
+  if (line == end || !FindTitle((*line).text, "[Events]")) {
     return true;
   }
 
@@ -370,23 +390,23 @@ void AssParser::set_stylename_fontdesc() {
   FontDesc empty_font_desc;
 
   for (const auto& style : styles_) {
-    if (style.style[1] == "Default") {
+    if (style.name == "Default") {
       has_default_style_ = true;
     }
 
-    stylename_fontdesc_[std::string(style.style[1])] = empty_font_desc;
-    nonstd::string_view fontname = style.style[2];
+    stylename_fontdesc_[std::string(style.name)] = empty_font_desc;
+    nonstd::string_view fontname = style.fontname;
 
     if (fontname[0] == '@') {
       fontname = fontname.substr(1);
     }
 
-    stylename_fontdesc_[std::string(style.style[1])].fontname =
+    stylename_fontdesc_[std::string(style.name)].fontname =
         std::string(fontname);
-    stylename_fontdesc_[std::string(style.style[1])].bold =
-        CalculateBold(StringToInt(std::string(style.style[8])));
-    stylename_fontdesc_[std::string(style.style[1])].italic =
-        CalculateItalic(StringToInt(std::string(style.style[9])));
+    stylename_fontdesc_[std::string(style.name)].bold =
+        CalculateBold(StringToInt(std::string(style.bold)));
+    stylename_fontdesc_[std::string(style.name)].italic =
+        CalculateItalic(StringToInt(std::string(style.italic)));
 
     RenameInfo rename_info = {
         style.line_num,

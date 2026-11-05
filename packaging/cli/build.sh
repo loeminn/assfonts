@@ -19,3 +19,4 @@ cmake --build build/queue-tests --parallel 2
 ctest --test-dir build/queue-tests --output-on-failure
 python3 tests/cli_batch_test.py build/cli/src/cli/assfonts
 python3 tests/cli_failure_test.py build/cli/src/cli/assfonts
+python3 tests/cli_format_test.py build/cli/src/cli/assfonts

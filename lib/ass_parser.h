@@ -107,7 +107,10 @@ class AssParser {
   struct StyleInfo {
     unsigned int line_num;
     const char* line_beg;
-    std::vector<nonstd::string_view> style;
+    nonstd::string_view name;
+    nonstd::string_view fontname;
+    nonstd::string_view bold;
+    nonstd::string_view italic;
   };
 
   struct DialogueInfo {
