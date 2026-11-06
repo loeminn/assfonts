@@ -32,7 +32,8 @@ with tempfile.TemporaryDirectory() as temp:
     db.mkdir()
     make_font(False, 'Issue35 Demo', 'Issue35 Regular Face').save(fonts / 'regular.ttf')
     bold = make_font(True, 'Issue35 Demo', 'Issue35 Bold Face', 'Issue35 Typographic')
-    for key, value in {1: '测试字体', 2: '粗体'}.items():
+    for key, value in {1: '测试字体', 2: '粗体',
+                       16: '排印测试字体', 17: '特粗'}.items():
         bold['name'].setName(value, key, 3, 1, 0x804)
     # These must never be combined across language or encoding records.
     bold['name'].setName('Unpaired Language', 1, 3, 1, 0x411)
@@ -51,17 +52,23 @@ with tempfile.TemporaryDirectory() as temp:
         assert (result.returncode == 0) == success, result.stdout + result.stderr
         return work, result.stdout
 
-    for mode, flags in [('embed', ['-e']), ('subset', []), ('rename', ['-r'])]:
-        work, log = run(mode, 'Issue35 Demo Bold', flags)
-        assert f'"{fonts / "bold.ttf"}"[0]' in log, log
-        output = work / ('input.rename.assfonts.ass' if mode == 'rename' else 'input.assfonts.ass')
-        assert '[Fonts]' in output.read_text(encoding='utf-8')
-        if mode == 'rename':
-            font_dir, = work.glob('*_subsetted')
-            result = subprocess.run([binary, '-e', '-i', str(work / 'input.rename.ass'),
-                                     '-o', str(work), '-f', str(font_dir), '-d', str(db)],
-                                    capture_output=True, text=True, timeout=30)
-            assert result.returncode == 0, result.stdout + result.stderr
+    for alias_index, query in enumerate(['Issue35 Demo Bold',
+                                         'Issue35 Typographic Heavy',
+                                         '排印测试字体 特粗']):
+        for mode, flags in [('embed', ['-e']), ('subset', []), ('rename', ['-r'])]:
+            work, log = run(f'{alias_index}-{mode}', query, flags)
+            assert f'"{fonts / "bold.ttf"}"[0]' in log, log
+            output = work / ('input.rename.assfonts.ass' if mode == 'rename' else 'input.assfonts.ass')
+            assert '[Fonts]' in output.read_text(encoding='utf-8')
+            if mode != 'embed':
+                font_dir, = work.glob('*_subsetted')
+                # Use only generated fonts and an empty database. A successful
+                # initial match must survive subsetting, including name IDs 16/17.
+                source = work / ('input.rename.ass' if mode == 'rename' else 'input.ass')
+                result = subprocess.run([binary, '-e', '-i', str(source),
+                                         '-o', str(work), '-f', str(font_dir), '-d', str(db)],
+                                        capture_output=True, text=True, timeout=30)
+                assert result.returncode == 0, result.stdout + result.stderr
     for index, name in enumerate(['Issue35 Typographic Heavy', '测试字体 粗体',
                                    'issue35 demo bold', 'Issue35 Bold Face',
                                    'Issue35-Bold-Face']):

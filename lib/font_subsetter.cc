@@ -393,6 +393,12 @@ bool FontSubsetter::CreateSubfont(FontSubsetInfo& subset_font,
       return false;
     }
   } else {
+    // The unchanged ASS may refer to a family/subfamily alias from IDs 16/17.
+    // HarfBuzz drops these by default, so retain them along with all languages.
+    hb_set_t* input_nameid =
+        hb_subset_input_set(input.get(), HB_SUBSET_SETS_NAME_ID);
+    hb_set_add(input_nameid, HB_OT_NAME_ID_TYPOGRAPHIC_FAMILY);
+    hb_set_add(input_nameid, HB_OT_NAME_ID_TYPOGRAPHIC_SUBFAMILY);
     hb_set_t* input_namelangid =
         hb_subset_input_set(input.get(), HB_SUBSET_SETS_NAME_LANG_ID);
     hb_set_clear(input_namelangid);
