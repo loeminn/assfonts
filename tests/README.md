@@ -37,3 +37,17 @@ font rename offsets and re-embedding. Also checks the legacy layout without a
 Format declaration and rejection of missing/duplicate fields and invalid rows.
 Event text containing commas must survive unchanged. Event Format reordering
 is outside this style-parser regression.
+
+## Font family/subfamily aliases
+
+```sh
+python3 tests/cli_font_alias_test.py build/cli/src/cli/assfonts
+```
+
+Requires Python fontTools (`python3-fonttools` on Debian) and DejaVu fonts.
+The test generates temporary fonts to cover legacy and typographic name pairs,
+localized names, language/encoding isolation, regular versus bold face selection,
+real-name precedence across scanned fonts and the database, TTC face indices,
+embedding/subsetting/renaming, and old database refresh. No proprietary font
+files are needed. Old database records are refreshed in memory on load; rebuild
+the database to persist the aliases and avoid repeated parsing on later runs.

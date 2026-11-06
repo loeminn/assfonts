@@ -64,9 +64,7 @@ bool FontSubsetter::Run(const bool is_no_subset, const bool is_rename) {
 #else
       AString fontname(font_set.first.fontname);
 #endif
-      if (!FindFont(font_set, fp_.font_list_, subfont_info.font_path.path,
-                    subfont_info.font_path.index) &&
-          !FindFont(font_set, fp_.font_list_in_db_, subfont_info.font_path.path,
+      if (!FindFont(font_set, subfont_info.font_path.path,
                     subfont_info.font_path.index)) {
         logger_->Warn(_ST("Missing the font: \"{}\" ({},{})"), fontname,
                       font_set.first.bold, font_set.first.italic);
@@ -126,6 +124,38 @@ std::vector<FontSubsetter::FontSubsetInfo> FontSubsetter::get_subfonts_info()
 void FontSubsetter::Clear() {
   subfont_dir_.clear();
   subfonts_info_.clear();
+}
+
+bool FontSubsetter::FindFont(
+    const std::pair<AssParser::FontDesc, std::unordered_set<char32_t>>& font_set,
+    AString& found_path, long& found_index) {
+  // Real names in either source always take precedence over derived aliases.
+  if (FindFont(font_set, fp_.font_list_, found_path, found_index) ||
+      FindFont(font_set, fp_.font_list_in_db_, found_path, found_index)) {
+    return true;
+  }
+  const auto name = ToLower(font_set.first.fontname);
+  for (const auto* fonts : {&fp_.font_list_, &fp_.font_list_in_db_}) {
+    bool found = false;
+    for (const auto& font : *fonts) {
+      if (std::find(font.second.aliases.begin(), font.second.aliases.end(), name) ==
+          font.second.aliases.end()) {
+        continue;
+      }
+      // An alias identifies a face, not a family to reselect by ASS weight.
+      // Resolve collisions deterministically instead of unordered-map order.
+      if (!found || font.first < found_path ||
+          (font.first == found_path && font.second.index < found_index)) {
+        found_path = font.first;
+        found_index = font.second.index;
+        found = true;
+      }
+    }
+    if (found) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool FontSubsetter::FindFont(
@@ -243,9 +273,7 @@ bool FontSubsetter::set_subfonts_info() {
 #else
     AString fontname(font_set.first.fontname);
 #endif
-    if (!FindFont(font_set, fp_.font_list_, font_path.path, font_path.index) &&
-        !FindFont(font_set, fp_.font_list_in_db_, font_path.path,
-                  font_path.index)) {
+    if (!FindFont(font_set, font_path.path, font_path.index)) {
       logger_->Warn(_ST("Missing the font: \"{}\" ({},{})"), fontname,
                     font_set.first.bold, font_set.first.italic);
       have_missing = true;

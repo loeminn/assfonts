@@ -105,6 +105,10 @@ class FontSubsetter {
   std::vector<FontSubsetInfo> subfonts_info_;
 
   bool FindFont(
+      const std::pair<AssParser::FontDesc, std::unordered_set<char32_t>>& font_set,
+      AString& found_path, long& found_index);
+
+  bool FindFont(
       const std::pair<AssParser::FontDesc, std::unordered_set<char32_t>>&
           font_set,
       const std::unordered_multimap<AString, FontParser::FontInfo>& font_list,

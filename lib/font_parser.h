@@ -20,6 +20,8 @@
 #ifndef ASSFONTS_FONTPARSER_H_
 #define ASSFONTS_FONTPARSER_H_
 
+#include <map>
+#include <tuple>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -67,6 +69,8 @@ class FontParser {
     std::vector<std::string> families;
     std::vector<std::string> fullnames;
     std::vector<std::string> psnames;
+    std::vector<std::string> aliases;
+    bool has_aliases = true;
     int weight = 400;
     int slant = 0;
     long index = 0;
@@ -95,10 +99,13 @@ class FontParser {
       const long face_idx,
       std::unordered_multimap<AString, FontInfo>& font_list,
       const AString& font_path, const std::string& last_write_time);
+  using NameRecords =
+      std::map<std::tuple<unsigned int, unsigned int, unsigned int>,
+               std::map<unsigned int, std::string>>;
   void ParseFontName(const FT_Face& ft_face, const unsigned int name_idx,
                      std::vector<std::string>& families,
                      std::vector<std::string>& fullnames,
-                     std::vector<std::string>& psnames);
+                     std::vector<std::string>& psnames, NameRecords& names);
   int AssFaceGetWeight(const FT_Face& face);
   bool ExistInDB(
       const AString& font_path, std::string& last_write_time,

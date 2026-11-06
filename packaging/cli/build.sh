@@ -20,3 +20,4 @@ ctest --test-dir build/queue-tests --output-on-failure
 python3 tests/cli_batch_test.py build/cli/src/cli/assfonts
 python3 tests/cli_failure_test.py build/cli/src/cli/assfonts
 python3 tests/cli_format_test.py build/cli/src/cli/assfonts
+python3 tests/cli_font_alias_test.py build/cli/src/cli/assfonts

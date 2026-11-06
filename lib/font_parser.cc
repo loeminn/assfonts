@@ -19,10 +19,12 @@
 
 #include "font_parser.h"
 
+#include <algorithm>
 #include <exception>
 #include <fstream>
 #include <future>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <thread>
 
@@ -170,6 +172,9 @@ void FontParser::SaveDB(const AString& db_path) {
     js_font["families"] = font.second.families;
     js_font["fullnames"] = font.second.fullnames;
     js_font["psnames"] = font.second.psnames;
+    if (font.second.has_aliases) {
+      js_font["aliases"] = font.second.aliases;
+    }
     js_font["weight"] = font.second.weight;
     js_font["slant"] = font.second.slant;
 #ifdef _WIN32
@@ -208,6 +213,10 @@ void FontParser::LoadDB(const AString& db_path) {
       font.second.families = js_font["families"];
       font.second.fullnames = js_font["fullnames"];
       font.second.psnames = js_font["psnames"];
+      font.second.has_aliases = js_font.contains("aliases");
+      if (font.second.has_aliases) {
+        font.second.aliases = js_font["aliases"].get<std::vector<std::string>>();
+      }
       font.second.weight = js_font["weight"];
       font.second.slant = js_font["slant"];
 #ifdef _WIN32
@@ -224,6 +233,26 @@ void FontParser::LoadDB(const AString& db_path) {
                   file_path.native());
     font_list_in_db_.clear();
     return;
+  }
+
+  // Old databases lack derived names. Reparse each affected file once, including
+  // database-only runs; never combine names from different faces or languages.
+  std::set<AString> stale_paths;
+  for (const auto& font : font_list_in_db_) {
+    if (!font.second.has_aliases) {
+      stale_paths.insert(font.first);
+    }
+  }
+  for (const auto& path : stale_paths) {
+    auto refreshed = GetFontInfo(path);
+    if (!refreshed.empty()) {
+      font_list_in_db_.erase(path);
+      font_list_in_db_.insert(refreshed.begin(), refreshed.end());
+    } else {
+      logger_->Warn(
+          _ST("Cannot refresh font aliases for \"{}\". "
+              "Rebuild the fonts database when the file is available."), path);
+    }
   }
 
   logger_->Info(_ST("Load fonts database \"{}\""), file_path.native());
@@ -338,9 +367,28 @@ void FontParser::GetFontInfoFromFace(
     }
   }
 
+  NameRecords names;
   const unsigned int num_names = FT_Get_Sfnt_Name_Count(ft_face);
   for (unsigned int name_idx = 0; name_idx < num_names; ++name_idx) {
-    ParseFontName(ft_face, name_idx, families, fullnames, psnames);
+    ParseFontName(ft_face, name_idx, families, fullnames, psnames, names);
+  }
+
+  for (const auto& record : names) {
+    for (const auto& ids : {
+             std::make_pair(TT_NAME_ID_FONT_FAMILY, TT_NAME_ID_FONT_SUBFAMILY),
+             std::make_pair(TT_NAME_ID_TYPOGRAPHIC_FAMILY,
+                            TT_NAME_ID_TYPOGRAPHIC_SUBFAMILY)}) {
+      const auto family = record.second.find(ids.first);
+      const auto subfamily = record.second.find(ids.second);
+      if (family == record.second.end() || subfamily == record.second.end()) {
+        continue;
+      }
+      const auto alias = family->second + " " + subfamily->second;
+      auto& aliases = font_info.second.aliases;
+      if (std::find(aliases.begin(), aliases.end(), alias) == aliases.end()) {
+        aliases.emplace_back(alias);
+      }
+    }
   }
 
   if (families.empty() && fullnames.empty() && psnames.empty()) {
@@ -377,7 +425,8 @@ void FontParser::ParseFontName(const FT_Face& ft_face,
                                const unsigned int name_idx,
                                std::vector<std::string>& families,
                                std::vector<std::string>& fullnames,
-                               std::vector<std::string>& psnames) {
+                               std::vector<std::string>& psnames,
+                               NameRecords& names) {
   FT_SfntName name;
   std::string wbuf;
   std::string buf;
@@ -388,7 +437,10 @@ void FontParser::ParseFontName(const FT_Face& ft_face,
 
   if (name.name_id != TT_NAME_ID_FULL_NAME &&
       name.name_id != TT_NAME_ID_FONT_FAMILY &&
-      name.name_id != TT_NAME_ID_PS_NAME) {
+      name.name_id != TT_NAME_ID_PS_NAME &&
+      name.name_id != TT_NAME_ID_FONT_SUBFAMILY &&
+      name.name_id != TT_NAME_ID_TYPOGRAPHIC_FAMILY &&
+      name.name_id != TT_NAME_ID_TYPOGRAPHIC_SUBFAMILY) {
     return;
   }
 
@@ -443,6 +495,12 @@ void FontParser::ParseFontName(const FT_Face& ft_face,
 
   if (buf.empty()) {
     return;
+  }
+
+  const auto normalized = ToLower(Trim(buf));
+  if (!normalized.empty() && normalized != "undefined") {
+    names[std::make_tuple(name.platform_id, name.encoding_id, name.language_id)]
+         [name.name_id] = normalized;
   }
 
   switch (name.name_id) {
@@ -545,7 +603,11 @@ bool FontParser::ExistInDB(
     return false;
   }
 
-  if (iters_found[0]->second.last_write_time == last_write_time) {
+  if (std::all_of(iters_found.begin(), iters_found.end(),
+                  [&](const auto& entry) {
+                    return entry->second.has_aliases &&
+                           entry->second.last_write_time == last_write_time;
+                  })) {
     return true;
   } else {
     return false;
